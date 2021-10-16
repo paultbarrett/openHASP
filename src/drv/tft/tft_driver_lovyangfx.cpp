@@ -29,7 +29,7 @@ void LovyanGfx::init(int w, int h)
         cfg.pin_d4 = TFT_D4;
         cfg.pin_d5 = TFT_D5;
         cfg.pin_d6 = TFT_D6;
-        cfg.pin_d7 = TFT_D7
+        cfg.pin_d7 = TFT_D7;
         bus->config(cfg);                     // 設定値をバスに反映します。
         tft._panel_instance.setBus(bus);      // バスをパネルにセットします。
     }
@@ -90,9 +90,9 @@ void LovyanGfx::init(int w, int h)
     { // タッチスクリーン制御の設定を行います。（必要なければ削除）
         auto cfg            = tft._touch_instance.config();
         cfg.x_min           = 0;    // タッチスクリーンから得られる最小のX値(生の値)
-        cfg.x_max           = (w-1);  // タッチスクリーンから得られる最大のX値(生の値)
+        cfg.x_max           = w;  // タッチスクリーンから得られる最大のX値(生の値)
         cfg.y_min           = 0;    // タッチスクリーンから得られる最小のY値(生の値)
-        cfg.y_max           = (h-1);  // タッチスクリーンから得られる最大のY値(生の値)
+        cfg.y_max           = h;  // タッチスクリーンから得られる最大のY値(生の値)
         cfg.pin_int         = TOUCH_IRQ;   // INTが接続されているピン番号
         cfg.bus_shared      = true; // 画面と共通のバスを使用している場合 trueを設定
         cfg.offset_rotation = 0; // 表示とタッチの向きのが一致しない場合の調整 0~7の値で設定
