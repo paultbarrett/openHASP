@@ -27,11 +27,19 @@ class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_ILI9488 _panel_instance;
     lgfx::IBus* _bus_instance; // SPIバスのインスタンス
     lgfx::Light_PWM _light_instance;
+    #if TOUCH_DRIVER == 2046
     lgfx::Touch_XPT2046 _touch_instance;
+    #elif TOUCH_DRIVER == 911
+    lgfx::Touch_GT911 _touch_instance;
+    #endif
 
     LGFX(void)
     {
+        #ifdef ESP32_PARALLEL
+        _bus_instance = new lgfx::v1::Bus_Parallel8();   
+        #else
         _bus_instance = new lgfx::v1::Bus_SPI();
+        #endif
     }
 };
 

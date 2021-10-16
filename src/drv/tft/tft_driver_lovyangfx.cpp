@@ -13,7 +13,27 @@ void LovyanGfx::init(int w, int h)
 #else
     int dma_channel = 1; // Set the DMA channel (1 or 2. 0=disable)
 #endif
-
+    #ifdef ESP32_PARALLEL
+    { // バス制御の設定を行います。
+        auto bus     = (lgfx::v1::Bus_Parallel8*)tft._bus_instance;
+        auto cfg     = bus->config(); // バス設定用の構造体を取得します。
+        cfg.i2s_port = I2S_NUM_0;         
+        cfg.freq_write = 20000000; 
+        cfg.pin_wr = TFT_WR;
+        cfg.pin_rd = TFT_RD;
+        cfg.pin_rs = TFT_DC;
+        cfg.pin_d0 = TFT_D0;
+        cfg.pin_d1 = TFT_D1;
+        cfg.pin_d2 = TFT_D2;
+        cfg.pin_d3 = TFT_D3;
+        cfg.pin_d4 = TFT_D4;
+        cfg.pin_d5 = TFT_D5;
+        cfg.pin_d6 = TFT_D6;
+        cfg.pin_d7 = TFT_D7
+        bus->config(cfg);                     // 設定値をバスに反映します。
+        tft._panel_instance.setBus(bus);      // バスをパネルにセットします。
+    }
+    #else
     { // バス制御の設定を行います。
         auto bus     = (lgfx::v1::Bus_SPI*)tft._bus_instance;
         auto cfg     = bus->config(); // バス設定用の構造体を取得します。
@@ -31,7 +51,7 @@ void LovyanGfx::init(int w, int h)
         bus->config(cfg);                     // 設定値をバスに反映します。
         tft._panel_instance.setBus(bus);      // バスをパネルにセットします。
     }
-
+    #endif
     {                                                       // 表示パネル制御の設定を行います。
         auto cfg            = tft._panel_instance.config(); // 表示パネル設定用の構造体を取得します。
         cfg.pin_cs          = TFT_CS;                       // CSが接続されているピン番号   (-1 = disable)
@@ -70,18 +90,26 @@ void LovyanGfx::init(int w, int h)
     { // タッチスクリーン制御の設定を行います。（必要なければ削除）
         auto cfg            = tft._touch_instance.config();
         cfg.x_min           = 0;    // タッチスクリーンから得られる最小のX値(生の値)
-        cfg.x_max           = 319;  // タッチスクリーンから得られる最大のX値(生の値)
+        cfg.x_max           = (w-1);  // タッチスクリーンから得られる最大のX値(生の値)
         cfg.y_min           = 0;    // タッチスクリーンから得られる最小のY値(生の値)
-        cfg.y_max           = 479;  // タッチスクリーンから得られる最大のY値(生の値)
-        cfg.pin_int         = -1;   // INTが接続されているピン番号
+        cfg.y_max           = (h-1);  // タッチスクリーンから得られる最大のY値(生の値)
+        cfg.pin_int         = TOUCH_IRQ;   // INTが接続されているピン番号
         cfg.bus_shared      = true; // 画面と共通のバスを使用している場合 trueを設定
         cfg.offset_rotation = 0; // 表示とタッチの向きのが一致しない場合の調整 0~7の値で設定
+        #if TOUCH_DRIVER == 2046
         cfg.spi_host        = VSPI_HOST;           // 使用するSPIを選択 (HSPI_HOST or VSPI_HOST)
         cfg.freq            = SPI_TOUCH_FREQUENCY; // SPIクロックを設定
         cfg.pin_sclk        = TFT_SCLK;            // SCLKが接続されているピン番号
         cfg.pin_mosi        = TFT_MOSI;            // MOSIが接続されているピン番号
         cfg.pin_miso        = TFT_MISO;            // MISOが接続されているピン番号
         cfg.pin_cs          = TOUCH_CS;            //   CSが接続されているピン番号
+        #elif TOUCH_DRIVER == 911
+        cfg.i2c_port = 1;      // 使用するI2Cを選択 (0 or 1)
+        cfg.i2c_addr = TOUCH_I2C_ADDR;   // I2Cデバイスアドレス番号
+        cfg.pin_sda  = TOUCH_SDA;     // SDAが接続されているピン番号
+        cfg.pin_scl  = TOUCH_SCL;     // SCLが接続されているピン番号
+        cfg.freq = I2C_TOUCH_FREQUENCY;     // I2Cクロックを設定
+        #endif
         tft._touch_instance.config(cfg);
         tft._panel_instance.setTouch(&tft._touch_instance); // タッチスクリーンをパネルにセットします。
     }
@@ -100,7 +128,24 @@ void LovyanGfx::show_info()
 
     //     LOG_VERBOSE(TAG_TFT, F("Transactns : %s"), (tftSetup.trans == 1) ? PSTR(D_YES) : PSTR(D_NO));
     //     LOG_VERBOSE(TAG_TFT, F("Interface  : %s"), (tftSetup.serial == 1) ? PSTR("SPI") : PSTR("Parallel"));
+    #ifdef ESP32_PARALLEL
+    {
+        auto bus = (lgfx::v1::Bus_Parallel8*)tft._bus_instance;
+        auto cfg = bus->config(); // バス設定用の構造体を取得します。
+        tftPinInfo(F("TFT_WR"), cfg.pin_wr);
+        tftPinInfo(F("TFT_RD"), cfg.pin_rd);
+        tftPinInfo(F("TFT_RS"), cfg.pin_rs);
 
+        tftPinInfo(F("TFT_D0"), cfg.pin_d0);
+        tftPinInfo(F("TFT_D1"), cfg.pin_d1);
+        tftPinInfo(F("TFT_D2"), cfg.pin_d2);
+        tftPinInfo(F("TFT_D3"), cfg.pin_d3);
+        tftPinInfo(F("TFT_D4"), cfg.pin_d4);
+        tftPinInfo(F("TFT_D5"), cfg.pin_d5);
+        tftPinInfo(F("TFT_D6"), cfg.pin_d6);
+        tftPinInfo(F("TFT_D7"), cfg.pin_d7);
+    }
+    #else
     {
         auto bus = (lgfx::v1::Bus_SPI*)tft._bus_instance;
         auto cfg = bus->config(); // バス設定用の構造体を取得します。
@@ -109,20 +154,20 @@ void LovyanGfx::show_info()
         tftPinInfo(F("SCLK"), cfg.pin_sclk);
         tftPinInfo(F("TFT_DC"), cfg.pin_dc);
     }
-
+    #endif
     {
         auto cfg = tft._panel_instance.config(); // バス設定用の構造体を取得します。
         tftPinInfo(F("TFT_CS"), cfg.pin_cs);
         tftPinInfo(F("TFT_RST"), cfg.pin_rst);
     }
-
+    #ifndef ESP32_PARALLEL
     {
         auto bus      = (lgfx::v1::Bus_SPI*)tft._bus_instance;
         auto cfg      = bus->config(); // バス設定用の構造体を取得します。
         uint32_t freq = cfg.freq_write / 100000;
         LOG_VERBOSE(TAG_TFT, F("Display SPI freq. : %d.%d MHz"), freq / 10, freq % 10);
     }
-
+    #endif
     {
         auto cfg = tft._touch_instance.config(); // バス設定用の構造体を取得します。
         if(cfg.pin_cs != -1) {
@@ -131,18 +176,6 @@ void LovyanGfx::show_info()
             LOG_VERBOSE(TAG_TFT, F("Touch SPI freq.   : %d.%d MHz"), freq / 10, freq % 10);
         }
     }
-
-    //     tftPinInfo(F("TFT_WR"), tftSetup.pin_tft_wr);
-    //     tftPinInfo(F("TFT_RD"), tftSetup.pin_tft_rd);
-
-    //     tftPinInfo(F("TFT_D0"), tftSetup.pin_tft_d0);
-    //     tftPinInfo(F("TFT_D1"), tftSetup.pin_tft_d1);
-    //     tftPinInfo(F("TFT_D2"), tftSetup.pin_tft_d2);
-    //     tftPinInfo(F("TFT_D3"), tftSetup.pin_tft_d3);
-    //     tftPinInfo(F("TFT_D4"), tftSetup.pin_tft_d4);
-    //     tftPinInfo(F("TFT_D5"), tftSetup.pin_tft_d5);
-    //     tftPinInfo(F("TFT_D6"), tftSetup.pin_tft_d6);
-    //     tftPinInfo(F("TFT_D7"), tftSetup.pin_tft_d7);
 
     //     if(tftSetup.serial == 1) {
     //         LOG_VERBOSE(TAG_TFT, F("Display SPI freq. : %d.%d MHz"), tftSetup.tft_spi_freq / 10,
