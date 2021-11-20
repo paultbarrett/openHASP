@@ -54,9 +54,9 @@ uint32_t mqttPublishCount;
 uint32_t mqttReceiveCount;
 uint32_t mqttFailedCount;
 
-char mqttServer[16]   = MQTT_HOST;
-char mqttUser[23]     = MQTT_USER;
-char mqttPassword[32] = MQTT_PASSW;
+char mqttServer[MAX_USERNAME_LENGTH]   = MQTT_HOST;
+char mqttUsername[MAX_USERNAME_LENGTH] = MQTT_USER;
+char mqttPassword[MAX_PASSWORD_LENGTH] = MQTT_PASSW;
 // char mqttNodeName[16]  = MQTT_NODENAME;
 char mqttGroupName[16] = MQTT_GROUPNAME;
 uint16_t mqttPort      = MQTT_PORT;
@@ -99,13 +99,12 @@ bool mqtt_send_lwt(bool online)
 {
     char tmp_payload[8];
     char tmp_topic[strlen(mqttNodeTopic) + 4];
+
     strncpy(tmp_topic, mqttNodeTopic, sizeof(tmp_topic));
     strncat_P(tmp_topic, PSTR(MQTT_TOPIC_LWT), sizeof(tmp_topic));
-    // snprintf_P(tmp_topic, sizeof(tmp_topic), PSTR("%s" MQTT_TOPIC_LWT), mqttNodeTopic);
 
     size_t len = snprintf_P(tmp_payload, sizeof(tmp_payload), online ? PSTR("online") : PSTR("offline"));
     bool res   = mqttPublish(tmp_topic, tmp_payload, len, true);
-
     return res;
 }
 
@@ -171,7 +170,7 @@ static void mqtt_message_cb(char* topic, byte* payload, unsigned int length)
     } else if(topic == strstr_P(topic, PSTR("homeassistant/status"))) { // HA discovery topic
         if(mqttHAautodiscover && !strcasecmp_P((char*)payload, PSTR("online"))) {
             mqtt_ha_register_auto_discovery(); // auto-discovery first
-            dispatch_current_state();          // send the data
+            dispatch_current_state(TAG_MQTT);  // send the data
         }
         return;
 #endif
@@ -242,7 +241,7 @@ void mqttStart()
 
     haspProgressMsg(F(D_MQTT_CONNECTING));
     haspProgressVal(mqttReconnectCount * 5);
-    if(!mqttClient.connect(mqttClientId, mqttUser, mqttPassword, buffer, 0, true, lastWillPayload, true)) {
+    if(!mqttClient.connect(mqttClientId, mqttUsername, mqttPassword, buffer, 0, true, lastWillPayload, true)) {
         // Retry until we give up and restart after connectTimeout seconds
         mqttReconnectCount++;
 
@@ -314,8 +313,13 @@ void mqttStart()
 
     /* Home Assistant auto-configuration */
 #ifdef HASP_USE_HA
-    if(mqttHAautodiscover) mqttSubscribeTo(F("hass/status"), mqttClientId);
-    if(mqttHAautodiscover) mqttSubscribeTo(F("homeassistant/status"), mqttClientId);
+    if(mqttHAautodiscover) {
+        char topic[64];
+        snprintf_P(topic, sizeof(topic), PSTR("hass/status"));
+        mqttSubscribeTo(topic);
+        snprintf_P(topic, sizeof(topic), PSTR("homeassistant/status"));
+        mqttSubscribeTo(topic);
+    }
 #endif
 
     // Force any subscribed clients to toggle offline/online when we first connect to
@@ -379,7 +383,7 @@ void mqtt_get_info(JsonDocument& doc)
 
     JsonObject info          = doc.createNestedObject(F("MQTT"));
     info[F(D_INFO_SERVER)]   = mqttServer;
-    info[F(D_INFO_USERNAME)] = mqttUser;
+    info[F(D_INFO_USERNAME)] = mqttUsername;
 
     mac = halGetMacAddress(3, "");
     mac.toLowerCase();
@@ -433,8 +437,8 @@ bool mqttGetConfig(const JsonObject& settings)
     if(mqttPort != settings[FPSTR(FP_CONFIG_PORT)].as<uint16_t>()) changed = true;
     settings[FPSTR(FP_CONFIG_PORT)] = mqttPort;
 
-    if(strcmp(mqttUser, settings[FPSTR(FP_CONFIG_USER)].as<String>().c_str()) != 0) changed = true;
-    settings[FPSTR(FP_CONFIG_USER)] = mqttUser;
+    if(strcmp(mqttUsername, settings[FPSTR(FP_CONFIG_USER)].as<String>().c_str()) != 0) changed = true;
+    settings[FPSTR(FP_CONFIG_USER)] = mqttUsername;
 
     if(strcmp(mqttPassword, settings[FPSTR(FP_CONFIG_PASS)].as<String>().c_str()) != 0) changed = true;
     settings[FPSTR(FP_CONFIG_PASS)] = mqttPassword;
@@ -489,8 +493,8 @@ bool mqttSetConfig(const JsonObject& settings)
     }
 
     if(!settings[FPSTR(FP_CONFIG_USER)].isNull()) {
-        changed |= strcmp(mqttUser, settings[FPSTR(FP_CONFIG_USER)]) != 0;
-        strncpy(mqttUser, settings[FPSTR(FP_CONFIG_USER)], sizeof(mqttUser));
+        changed |= strcmp(mqttUsername, settings[FPSTR(FP_CONFIG_USER)]) != 0;
+        strncpy(mqttUsername, settings[FPSTR(FP_CONFIG_USER)], sizeof(mqttUsername));
     }
 
     if(!settings[FPSTR(FP_CONFIG_PASS)].isNull() &&

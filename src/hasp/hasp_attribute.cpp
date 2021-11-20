@@ -1155,10 +1155,10 @@ static hasp_attribute_type_t attribute_common_align(lv_obj_t* obj, const char* a
     if(update) {
         if(!strcasecmp_P(payload, PSTR("left"))) {
             val = LV_LABEL_ALIGN_LEFT;
-          //  pos = LV_ALIGN_IN_LEFT_MID;
+            //  pos = LV_ALIGN_IN_LEFT_MID;
         } else if(!strcasecmp_P(payload, PSTR("right"))) {
             val = LV_LABEL_ALIGN_RIGHT;
-           // pos = LV_ALIGN_IN_RIGHT_MID;
+            // pos = LV_ALIGN_IN_RIGHT_MID;
         } else if(!strcasecmp_P(payload, PSTR("center"))) {
             val = LV_LABEL_ALIGN_CENTER;
         } else if(!strcasecmp_P(payload, PSTR("auto"))) {
@@ -1174,7 +1174,7 @@ static hasp_attribute_type_t attribute_common_align(lv_obj_t* obj, const char* a
             lv_obj_t* label = FindButtonLabel(obj);
             if(label) {
                 if(update) {
-                  //  lv_obj_align(label, NULL, pos, 0, 0);
+                    //  lv_obj_align(label, NULL, pos, 0, 0);
                     lv_label_set_align(label, val);
                 } else
                     val = lv_label_get_align(label);
@@ -2068,14 +2068,16 @@ void attr_out_str(lv_obj_t* obj, const char* attribute, const char* data)
 
     if(!attribute || !hasp_find_id_from_obj(obj, &pageid, &objid)) return;
 
-    StaticJsonDocument<32> doc; // Total (recommended) size
-    if(data)
-        doc[attribute].set(data);
-    else
-        doc[attribute].set(nullptr);
-
-    char payload[MQTT_MAX_PACKET_SIZE];
-    serializeJson(doc, payload, MQTT_MAX_PACKET_SIZE);
+    const size_t size = 32 + strlen(attribute) + strlen(data);
+    char payload[size];
+    {
+        StaticJsonDocument<64> doc; // Total (recommended) size for const char*
+        if(data)
+            doc[attribute].set(data);
+        else
+            doc[attribute].set(nullptr);
+        serializeJson(doc, payload, size);
+    }
     object_dispatch_state(pageid, objid, payload);
 }
 
@@ -2086,9 +2088,13 @@ void attr_out_int(lv_obj_t* obj, const char* attribute, int32_t val)
 
     if(!attribute || !hasp_find_id_from_obj(obj, &pageid, &objid)) return;
 
-    char payload[64 + strlen(attribute)];
-    snprintf_P(payload, sizeof(payload), PSTR("{\"%s\":%d}"), attribute, val);
-
+    const size_t size = 32 + strlen(attribute);
+    char payload[size];
+    {
+        StaticJsonDocument<64> doc; // Total (recommended) size for const char*
+        doc[attribute].set(val);
+        serializeJson(doc, payload, size);
+    }
     object_dispatch_state(pageid, objid, payload);
 }
 
@@ -2099,12 +2105,13 @@ void attr_out_bool(lv_obj_t* obj, const char* attribute, bool val)
 
     if(!attribute || !hasp_find_id_from_obj(obj, &pageid, &objid)) return;
 
-    char payload[16 + strlen(attribute)];
-    if(val)
-        snprintf_P(payload, sizeof(payload), PSTR("{\"%s\":true}"), attribute);
-    else
-        snprintf_P(payload, sizeof(payload), PSTR("{\"%s\":false}"), attribute);
-
+    const size_t size = 32 + strlen(attribute);
+    char payload[size];
+    {
+        StaticJsonDocument<64> doc; // Total (recommended) size for const char*
+        doc[attribute].set(val);
+        serializeJson(doc, payload, size);
+    }
     object_dispatch_state(pageid, objid, payload);
 }
 
@@ -2115,12 +2122,22 @@ void attr_out_color(lv_obj_t* obj, const char* attribute, lv_color_t color)
 
     if(!attribute || !hasp_find_id_from_obj(obj, &pageid, &objid)) return;
 
-    char payload[64 + strlen(attribute)];
-    lv_color32_t c32;
-    c32.full = lv_color_to32(color);
+    const size_t size = 64 + strlen(attribute);
+    char payload[size];
+    {
+        StaticJsonDocument<128> doc; // Total (recommended) size for const char*
+        char buffer[16];
+        lv_color32_t c32;
 
-    snprintf_P(payload, sizeof(payload), PSTR("{\"%s\":\"#%02x%02x%02x\",\"r\":%d,\"g\":%d,\"b\":%d}"), attribute,
-               c32.ch.red, c32.ch.green, c32.ch.blue, c32.ch.red, c32.ch.green, c32.ch.blue);
+        c32.full = lv_color_to32(color);
+        snprintf_P(buffer, sizeof(buffer), PSTR("#%02x%02x%02x"), c32.ch.red, c32.ch.green, c32.ch.blue);
+
+        doc[attribute].set(buffer);
+        doc["r"].set(c32.ch.red);
+        doc["g"].set(c32.ch.green);
+        doc["b"].set(c32.ch.blue);
+        serializeJson(doc, payload, size);
+    }
     object_dispatch_state(pageid, objid, payload);
 }
 
@@ -2197,10 +2214,12 @@ void hasp_process_obj_attribute(lv_obj_t* obj, const char* attribute, const char
 
         case ATTR_OBJ:
             text = (char*)obj_get_type_name(obj);
-            if(update)
-                ret = HASP_ATTR_TYPE_STR_READONLY;
+            if(update && strcasecmp(payload, text) == 0)
+                ret = HASP_ATTR_TYPE_METHOD_OK; // Value is already correct
+            else if(update)
+                ret = HASP_ATTR_TYPE_STR_READONLY; // Can't change to the new value
             else
-                ret = HASP_ATTR_TYPE_STR;
+                ret = HASP_ATTR_TYPE_STR; // Reply the current value
             break;
 
         case ATTR_MODE:

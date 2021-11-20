@@ -26,6 +26,7 @@
 //#include "tpcal.h"
 
 //#include "Ticker.h"
+#include "lv_freetype.h"
 
 #if HASP_USE_PNGDECODE > 0
 #include "lv_png.h"
@@ -68,9 +69,12 @@ gui_conf_t gui_settings = {.show_pointer   = false,
                            .rotation       = TFT_ROTATION,
                            .invert_display = INVERT_COLORS,
                            .cal_data       = {0, 65535, 0, 65535, 0}};
+lv_obj_t* cursor;
 
 uint16_t tft_width  = TFT_WIDTH;
 uint16_t tft_height = TFT_HEIGHT;
+
+static lv_disp_buf_t disp_buf;
 
 // #if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_ESP8266)
 // static Ticker tick; /* timer for interrupt handler */
@@ -86,62 +90,29 @@ uint16_t tft_height = TFT_HEIGHT;
 //     lv_tick_inc(LVGL_TICK_PERIOD);
 // }
 
-IRAM_ATTR void gui_flush_cb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p)
+static inline void gui_init_lvgl()
 {
-    haspTft.flush_pixels(disp, area, color_p);
-}
+    LOG_VERBOSE(TAG_LVGL, F("Version    : %u.%u.%u %s"), LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
+                PSTR(LVGL_VERSION_INFO));
+    lv_init();
 
-// IRAM_ATTR bool touch_read(lv_indev_drv_t* indev_driver, lv_indev_data_t* data)
-// {
-//     return haspTouch.read(indev_driver, data);
-// }
-
-void guiCalibrate(void)
-{
-#if TOUCH_DRIVER == 2046 && defined(USER_SETUP_LOADED)
-#ifdef TOUCH_CS
-    haspTouch.calibrate(gui_settings.cal_data);
+#if LV_USE_LOG != 0
+    // Register logger to capture lvgl_init output
+    lv_log_register_print_cb(debugLvglLogEvent);
 #endif
 
-    for(int i = 0; i < 5; i++) {
-        Serial.print(gui_settings.cal_data[i]);
-        if(i < 4) Serial.print(", ");
-    }
-
-    delay(500);
-    lv_obj_invalidate(lv_disp_get_layer_sys(NULL));
-#endif
-}
-
-void guiTftInit(void)
-{
-    haspTft.init(tft_width, tft_height);
-    haspTft.set_rotation(gui_settings.rotation);
-    haspTft.set_invert(gui_settings.invert_display);
-}
-
-void guiSetup()
-{
-    LOG_TRACE(TAG_TFT, F(D_SERVICE_STARTING));
-
-    // Initialize the TFT
-    guiTftInit();
-    haspTft.show_info();
-
-    LOG_INFO(TAG_TFT, F(D_SERVICE_STARTED));
+    static lv_color_t *guiVdbBuffer1, *guiVdbBuffer2 = NULL;
 
     /* Create the Virtual Device Buffers */
 #if defined(ARDUINO_ARCH_ESP32)
 
 #ifdef USE_DMA_TO_TFT
-    static lv_color_t *guiVdbBuffer1, *guiVdbBuffer2 = NULL;
     // DMA: len must be less than 32767
     const size_t guiVDBsize = 15 * 1024u; // 30 KBytes
     guiVdbBuffer1           = (lv_color_t*)heap_caps_calloc(guiVDBsize, sizeof(lv_color_t), MALLOC_CAP_DMA);
     // guiVdbBuffer2 = (lv_color_t *)heap_caps_malloc(sizeof(lv_color_t) * guiVDBsize,   MALLOC_CAP_DMA);
     // lv_disp_buf_init(&disp_buf, guiVdbBuffer1, guiVdbBuffer2, guiVDBsize);
 #else
-    static lv_color_t* guiVdbBuffer1;
     const size_t guiVDBsize = 16 * 1024u; // 32 KBytes
 
     if(0 && psramFound()) {
@@ -161,13 +132,13 @@ void guiSetup()
     // size_t guiVDBsize = sizeof(guiVdbBuffer1) / sizeof(guiVdbBuffer1[0]);
     // lv_disp_buf_init(&disp_buf, guiVdbBuffer1, NULL, guiVDBsize);
 
-    static lv_color_t* guiVdbBuffer1;
     const size_t guiVDBsize = 2 * 512u; // 4 KBytes * 2
     guiVdbBuffer1           = (lv_color_t*)malloc(sizeof(lv_color_t) * guiVDBsize);
 
 #elif defined(WINDOWS) || defined(POSIX)
     const size_t guiVDBsize = LV_HOR_RES_MAX * 10;
-    static lv_color_t guiVdbBuffer1[guiVDBsize]; /*Declare a buffer for 10 lines*/
+    //  static lv_color_t guiVdbBuffer1[guiVDBsize]; /*Declare a buffer for 10 lines*/
+    guiVdbBuffer1 = (lv_color_t*)calloc(guiVDBsize, sizeof(lv_color_t));
 
 #else
     static lv_color_t guiVdbBuffer1[16 * 512u]; // 16 KBytes
@@ -176,91 +147,123 @@ void guiSetup()
     // lv_disp_buf_init(&disp_buf, guiVdbBuffer1, guiVdbBuffer2, guiVDBsize);
 #endif
 
-    LOG_TRACE(TAG_LVGL, F(D_SERVICE_STARTING));
-
-#if LV_USE_LOG != 0
-    // Register logger to capture lvgl_init output
-    lv_log_register_print_cb(debugLvglLogEvent);
-#endif
-
-    /* Initialize lvgl */
-    static lv_disp_buf_t disp_buf;
+    /* Initialize VDB */
     if(guiVdbBuffer1 && guiVDBsize > 0) {
-        lv_init();
         lv_disp_buf_init(&disp_buf, guiVdbBuffer1, NULL, guiVDBsize);
     } else {
         LOG_FATAL(TAG_GUI, F(D_ERROR_OUT_OF_MEMORY));
     }
 
-    LOG_VERBOSE(TAG_LVGL, F("Version    : %u.%u.%u %s"), LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
-                PSTR(LVGL_VERSION_INFO));
+#ifdef LV_MEM_SIZE
+    LOG_VERBOSE(TAG_LVGL, F("MEM size   : %d"), LV_MEM_SIZE);
+#endif
+    LOG_VERBOSE(TAG_LVGL, F("VFB size   : %d"), (size_t)sizeof(lv_color_t) * guiVDBsize);
+}
 
-    /* Initialize the LVGL display driver with correct orientation */
-#if TOUCH_DRIVER == 2046
+void gui_hide_pointer(bool hidden)
+{
+    if(cursor) lv_obj_set_hidden(cursor, hidden || !gui_settings.show_pointer);
+}
 
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.buffer   = &disp_buf;
-    disp_drv.flush_cb = gui_flush_cb;
+IRAM_ATTR void gui_flush_cb(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p)
+{
+    haspTft.flush_pixels(disp, area, color_p);
+}
 
-    if(gui_settings.rotation % 2) {
-        disp_drv.hor_res = tft_height;
-        disp_drv.ver_res = tft_width;
-    } else {
-        disp_drv.hor_res = tft_width;
-        disp_drv.ver_res = tft_height;
-    }
+IRAM_ATTR bool gui_touch_read(lv_indev_drv_t* indev_driver, lv_indev_data_t* data)
+{
+    return haspTouch.read(indev_driver, data);
+}
 
-    lv_disp_t* display = lv_disp_drv_register(&disp_drv);
-    lv_disp_set_rotation(display, LV_DISP_ROT_NONE);
-
-#elif defined(LANBONL8)
-
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.buffer   = &disp_buf;
-    disp_drv.flush_cb = gui_flush_cb;
-
-    disp_drv.hor_res = tft_width;
-    disp_drv.ver_res = tft_height;
-
-    lv_disp_rot_t rotation[] = {LV_DISP_ROT_NONE, LV_DISP_ROT_270, LV_DISP_ROT_180, LV_DISP_ROT_90};
-    lv_disp_t* display       = lv_disp_drv_register(&disp_drv);
-    lv_disp_set_rotation(display, rotation[(4 + gui_settings.rotation - TFT_ROTATION) % 4]);
-
-#elif defined(M5STACK)
-
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.buffer   = &disp_buf;
-    disp_drv.flush_cb = gui_flush_cb;
-
-    disp_drv.hor_res = tft_height;
-    disp_drv.ver_res = tft_width;
-
-    lv_disp_rot_t rotation[] = {LV_DISP_ROT_NONE, LV_DISP_ROT_270, LV_DISP_ROT_180, LV_DISP_ROT_90};
-    lv_disp_t* display       = lv_disp_drv_register(&disp_drv);
-    lv_disp_set_rotation(display, rotation[(4 + gui_settings.rotation - TFT_ROTATION) % 4]);
-
-#else
-
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.buffer   = &disp_buf;
-    disp_drv.flush_cb = gui_flush_cb;
-
-    disp_drv.hor_res = tft_width;
-    disp_drv.ver_res = tft_height;
-
-    lv_disp_rot_t rotation[] = {LV_DISP_ROT_NONE, LV_DISP_ROT_270, LV_DISP_ROT_180, LV_DISP_ROT_90};
-    lv_disp_t* display       = lv_disp_drv_register(&disp_drv);
-    lv_disp_set_rotation(display, rotation[(4 + gui_settings.rotation - TFT_ROTATION) % 4]);
-
+void guiCalibrate(void)
+{
+#if TOUCH_DRIVER == 0x2046 && defined(USER_SETUP_LOADED)
+#ifdef TOUCH_CS
+    haspTouch.calibrate(gui_settings.cal_data);
 #endif
 
-    /* Initialize Filesystems */
+    for(int i = 0; i < 5; i++) {
+        Serial.print(gui_settings.cal_data[i]);
+        if(i < 4) Serial.print(", ");
+    }
+
+    delay(500);
+    lv_obj_invalidate(lv_disp_get_layer_sys(NULL));
+#endif
+}
+
+// fast init
+void gui_start_tft(void)
+{
+    /* Setup Backlight Control Pin */
+    haspDevice.set_backlight_pin(gui_settings.backlight_pin);
+
+    haspTft.init(tft_width, tft_height);
+    haspTft.set_rotation(gui_settings.rotation);
+    haspTft.set_invert(gui_settings.invert_display);
+}
+
+static inline void gui_init_tft(void)
+{
+    // Initialize TFT
+    LOG_TRACE(TAG_TFT, F(D_SERVICE_STARTING));
+    gui_start_tft();
+
+    haspTft.show_info();
+#ifdef USE_DMA_TO_TFT
+    LOG_VERBOSE(TAG_TFT, F("DMA        : " D_SETTING_ENABLED));
+#else
+    LOG_VERBOSE(TAG_TFT, F("DMA        : " D_SETTING_DISABLED));
+#endif
+    LOG_INFO(TAG_TFT, F(D_SERVICE_STARTED));
+}
+
+// initialize the image decoders
+static inline void gui_init_images()
+{
+#if HASP_USE_PNGDECODE > 0
+    lv_png_init(); // Initialize PNG decoder
+#endif
+
+#if HASP_USE_BMPDECODE > 0
+    lv_bmp_init(); // Initialize BMP decoder
+#endif
+
+#if HASP_USE_GIFDECODE > 0
+    lv_gif_init(); // Initialize GIF decoder
+#endif
+
+#if HASP_USE_JPGDECODE > 0
+    lv_split_jpeg_init(); // Initialize JPG decoder
+#endif
+
+#if defined(ARDUINO_ARCH_ESP32)
+    if(psramFound()) lv_img_cache_set_size(LV_IMG_CACHE_DEF_SIZE_PSRAM);
+#endif
+}
+
+// initialize the FreeType renderer
+static inline void gui_init_freetype()
+{
+// #ifdef 1 || USE_LVGL_FREETYPE
+#if defined(ARDUINO_ARCH_ESP32)
+    if(lv_freetype_init(USE_LVGL_FREETYPE_MAX_FACES, USE_LVGL_FREETYPE_MAX_SIZES,
+                        psramFound() ? USE_LVGL_FREETYPE_MAX_BYTES_PSRAM : USE_LVGL_FREETYPE_MAX_BYTES)) {
+        LOG_VERBOSE(TAG_FONT, F("FreeType v%d.%d.%d " D_SERVICE_STARTED), FREETYPE_MAJOR, FREETYPE_MINOR,
+                    FREETYPE_PATCH);
+    } else {
+        LOG_ERROR(TAG_FONT, F("FreeType " D_SERVICE_START_FAILED));
+    }
+
+#elif defined(WINDOWS) || defined(POSIX)
+#else
+#endif
+}
+
+static inline void gui_init_filesystems()
+{
 #if LV_USE_FS_IF != 0
-    //_lv_fs_init(); // lvgl File System -- not neaded, it done in lv_init() when LV_USE_FILESYSTEM is set
+    //_lv_fs_init(); // lvgl File System -- not needed, it done in lv_init() when LV_USE_FILESYSTEM is set
     LOG_VERBOSE(TAG_LVGL, F("Filesystem : " D_SETTING_ENABLED));
     lv_fs_if_init(); // auxilary file system drivers
     // filesystem_list_path("L:/");
@@ -278,46 +281,80 @@ void guiSetup()
 #else
     LOG_VERBOSE(TAG_LVGL, F("Filesystem : " D_SETTING_DISABLED));
 #endif
+}
 
-    /* Initialize PNG decoder */
-#if HASP_USE_PNGDECODE > 0
-    lv_png_init();
-#endif
+void guiSetup()
+{
+    // Initialize hardware drivers
+    gui_init_tft();
 
-    /* Initialize BMP decoder */
-#if HASP_USE_BMPDECODE > 0
-    lv_bmp_init();
-#endif
+    // Initialize LVGL
+    LOG_TRACE(TAG_LVGL, F(D_SERVICE_STARTING));
+    gui_init_lvgl();
+    gui_init_images();
+    gui_init_freetype();
+    gui_init_filesystems();
 
-    /* Initialize GIF decoder */
-#if HASP_USE_GIFDECODE > 0
-    // lv_gif_init();
-#endif
+    /* Initialize the LVGL display driver with correct orientation */
+#if(TOUCH_DRIVER == 0x2046) || defined(LGFX_USE_V1) // Use native display driver to rotate display and touch
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.buffer   = &disp_buf;
+    disp_drv.flush_cb = gui_flush_cb;
 
-    /* Initialize JPG decoder */
-#if HASP_USE_JPGDECODE > 0
-    lv_split_jpeg_init();
-#endif
-
-#if defined(ARDUINO_ARCH_ESP32)
-    if(psramFound()) {
-        lv_img_cache_set_size(LV_IMG_CACHE_DEF_SIZE_PSRAM);
+    if(gui_settings.rotation % 2) {
+        disp_drv.hor_res = tft_height;
+        disp_drv.ver_res = tft_width;
+    } else {
+        disp_drv.hor_res = tft_width;
+        disp_drv.ver_res = tft_height;
     }
-#endif
 
-#ifdef USE_DMA_TO_TFT
-    LOG_VERBOSE(TAG_GUI, F("DMA        : " D_SETTING_ENABLED));
-#else
-    LOG_VERBOSE(TAG_GUI, F("DMA        : " D_SETTING_DISABLED));
-#endif
+    lv_disp_t* display = lv_disp_drv_register(&disp_drv);
+    lv_disp_set_rotation(display, LV_DISP_ROT_NONE);
 
-    /* Setup Backlight Control Pin */
-    haspDevice.set_backlight_pin(gui_settings.backlight_pin);
+    /*
+    #elif defined(LANBONL8) // Screen is 0 deg. rotated
+        static lv_disp_drv_t disp_drv;
+        lv_disp_drv_init(&disp_drv);
+        disp_drv.buffer   = &disp_buf;
+        disp_drv.flush_cb = gui_flush_cb;
 
-#ifdef LV_MEM_SIZE
-    LOG_VERBOSE(TAG_LVGL, F("MEM size   : %d"), LV_MEM_SIZE);
+        disp_drv.hor_res = tft_width;
+        disp_drv.ver_res = tft_height;
+
+        lv_disp_rot_t rotation[] = {LV_DISP_ROT_NONE, LV_DISP_ROT_270, LV_DISP_ROT_180, LV_DISP_ROT_90};
+        lv_disp_t* display       = lv_disp_drv_register(&disp_drv);
+        lv_disp_set_rotation(display, rotation[(4 + gui_settings.rotation - TFT_ROTATION) % 4]);
+    */
+
+#elif defined(M5STACK) // Screen is 90 deg. rotated
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.buffer   = &disp_buf;
+    disp_drv.flush_cb = gui_flush_cb;
+
+    disp_drv.hor_res = tft_height;
+    disp_drv.ver_res = tft_width;
+
+    lv_disp_rot_t rotation[] = {LV_DISP_ROT_NONE, LV_DISP_ROT_270, LV_DISP_ROT_180, LV_DISP_ROT_90};
+    lv_disp_t* display       = lv_disp_drv_register(&disp_drv);
+    lv_disp_set_rotation(display, rotation[(4 + gui_settings.rotation - TFT_ROTATION) % 4]);
+
+#else // Use lvgl transformations
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.buffer   = &disp_buf;
+    disp_drv.flush_cb = gui_flush_cb;
+
+    disp_drv.hor_res = tft_width;
+    disp_drv.ver_res = tft_height;
+
+    lv_disp_rot_t rotation[] = {LV_DISP_ROT_NONE, LV_DISP_ROT_270, LV_DISP_ROT_180, LV_DISP_ROT_90};
+    lv_disp_t* display       = lv_disp_drv_register(&disp_drv);
+    lv_disp_set_rotation(display, rotation[(4 + gui_settings.rotation - TFT_ROTATION) % 4]);
+
 #endif
-    LOG_VERBOSE(TAG_LVGL, F("VFB size   : %d"), (size_t)sizeof(lv_color_t) * guiVDBsize);
 
     /* Initialize the touch pad */
     static lv_indev_drv_t indev_drv;
@@ -326,34 +363,28 @@ void guiSetup()
 #if defined(WINDOWS) || defined(POSIX)
     indev_drv.read_cb = mouse_read;
 #else
-    indev_drv.read_cb = touch_read;
+    indev_drv.read_cb = gui_touch_read;
 #endif
     lv_indev_t* mouse_indev  = lv_indev_drv_register(&indev_drv);
     mouse_indev->driver.type = LV_INDEV_TYPE_POINTER;
 
     /*Set a cursor for the mouse*/
-    if(gui_settings.show_pointer) {
-        // lv_obj_t * label = lv_label_create(lv_layer_sys(), NULL);
-        // lv_label_set_text(label, "<");
-        // lv_indev_set_cursor(mouse_indev, label); // connect the object to the driver
-
-        LOG_TRACE(TAG_GUI, F("Initialize Cursor"));
-        lv_obj_t* cursor;
-        lv_obj_t* mouse_layer = lv_disp_get_layer_sys(NULL); // default display
+    LOG_TRACE(TAG_GUI, F("Initialize Cursor"));
+    lv_obj_t* mouse_layer = lv_disp_get_layer_sys(NULL); // default display
 
 #if defined(ARDUINO_ARCH_ESP32)
-        LV_IMG_DECLARE(mouse_cursor_icon);          /*Declare the image file.*/
-        cursor = lv_img_create(mouse_layer, NULL);  /*Create an image object for the cursor */
-        lv_img_set_src(cursor, &mouse_cursor_icon); /*Set the image source*/
+    LV_IMG_DECLARE(mouse_cursor_icon);          /*Declare the image file.*/
+    cursor = lv_img_create(mouse_layer, NULL);  /*Create an image object for the cursor */
+    lv_img_set_src(cursor, &mouse_cursor_icon); /*Set the image source*/
 #else
-        cursor = lv_obj_create(mouse_layer, NULL); // show cursor object on every page
-        lv_obj_set_size(cursor, 9, 9);
-        lv_obj_set_style_local_radius(cursor, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_RADIUS_CIRCLE);
-        lv_obj_set_style_local_bg_color(cursor, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_RED);
-        lv_obj_set_style_local_bg_opa(cursor, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_COVER);
+    cursor            = lv_obj_create(mouse_layer, NULL); // show cursor object on every page
+    lv_obj_set_size(cursor, 9, 9);
+    lv_obj_set_style_local_radius(cursor, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_RADIUS_CIRCLE);
+    lv_obj_set_style_local_bg_color(cursor, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_RED);
+    lv_obj_set_style_local_bg_opa(cursor, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_COVER);
 #endif
-        lv_indev_set_cursor(mouse_indev, cursor); /*Connect the image  object to the driver*/
-    }
+    gui_hide_pointer(false);
+    lv_indev_set_cursor(mouse_indev, cursor); /*Connect the image  object to the driver*/
 
 #if !(defined(WINDOWS) || defined(POSIX))
     // drv_touch_init(gui_settings.rotation); // Touch driver
@@ -460,7 +491,7 @@ bool guiGetConfig(const JsonObject& settings)
         } else {
             changed = true;
 
-#if TOUCH_DRIVER == 2046 && defined(USER_SETUP_LOADED) && defined(TOUCH_CS)
+#if TOUCH_DRIVER == 0x2046 && defined(USER_SETUP_LOADED) && defined(TOUCH_CS)
             // tft_espi_set_touch(gui_settings.cal_data);
             haspTft.tft.setTouch(gui_settings.cal_data);
 #endif
@@ -476,7 +507,7 @@ bool guiGetConfig(const JsonObject& settings)
         }
         changed = true;
 
-#if TOUCH_DRIVER == 2046 && defined(USER_SETUP_LOADED) && defined(TOUCH_CS)
+#if TOUCH_DRIVER == 0x2046 && defined(USER_SETUP_LOADED) && defined(TOUCH_CS)
         // tft_espi_set_touch(gui_settings.cal_data);
         haspTft.tft.setTouch(gui_settings.cal_data);
 #endif
@@ -519,6 +550,7 @@ bool guiSetConfig(const JsonObject& settings)
         changed |= gui_settings.show_pointer != settings[FPSTR(FP_GUI_POINTER)].as<bool>();
 
         gui_settings.show_pointer = settings[FPSTR(FP_GUI_POINTER)].as<bool>();
+        gui_hide_pointer(false);
     }
 
     if(!settings[FPSTR(FP_GUI_CALIBRATION)].isNull()) {
@@ -545,7 +577,7 @@ bool guiSetConfig(const JsonObject& settings)
             oobeSetAutoCalibrate(true);
         }
 
-#if TOUCH_DRIVER == 2046 && defined(USER_SETUP_LOADED) && defined(TOUCH_CS)
+#if TOUCH_DRIVER == 0x2046 && defined(USER_SETUP_LOADED) && defined(TOUCH_CS)
         if(status) // tft_espi_set_touch(gui_settings.cal_data);
             haspTft.tft.setTouch(gui_settings.cal_data);
 #endif

@@ -3,93 +3,232 @@
 
 #if defined(ARDUINO) && defined(LGFX_USE_V1)
 #include "tft_driver_lovyangfx.h"
+#include <Preferences.h>
 
 namespace dev {
 
+static void _pin_level(int_fast16_t pin, bool level)
+{
+    lgfx::pinMode(pin, lgfx::pin_mode_t::output);
+    if(level)
+        lgfx::gpio_hi(pin);
+    else
+        lgfx::gpio_lo(pin);
+}
+
+static uint32_t _read_panel_id(lgfx::Bus_SPI* bus, int32_t pin_cs, uint32_t cmd = 0x04,
+                               uint8_t dummy_read_bit = 1) // 0x04 = RDDID command
+{
+    bus->beginTransaction();
+    _pin_level(pin_cs, true);
+    bus->writeCommand(0, 8);
+    bus->wait();
+    _pin_level(pin_cs, false);
+    bus->writeCommand(cmd, 8);
+    if(dummy_read_bit) bus->writeData(0, dummy_read_bit); // dummy read bit
+    bus->beginRead();
+    uint32_t res = bus->readData(32);
+    bus->endTransaction();
+    _pin_level(pin_cs, true);
+
+    LOG_VERBOSE(TAG_TFT, "[Autodetect] read cmd:%u = %u", cmd, res);
+    return res;
+}
+
 void LovyanGfx::init(int w, int h)
 {
+    LOG_VERBOSE(TAG_TFT, F("%s - %d"), __FILE__, __LINE__);
+
+    Preferences preferences;
+    preferences.begin("gfx", false);
+
 #ifdef USE_DMA_TO_TFT
     int dma_channel = 1; // Set the DMA channel (1 or 2. 0=disable)
 #else
-    int dma_channel = 1; // Set the DMA channel (1 or 2. 0=disable)
+    int dma_channel = 0; // Set the DMA channel (1 or 2. 0=disable)
 #endif
 
-    { // バス制御の設定を行います。
-        auto bus     = (lgfx::v1::Bus_SPI*)tft._bus_instance;
-        auto cfg     = bus->config(); // バス設定用の構造体を取得します。
-        cfg.spi_host = VSPI_HOST;     // 使用するSPIを選択  (VSPI_HOST or HSPI_HOST)
-        cfg.spi_mode = 0;             // SPI通信モードを設定 (0 ~ 3)
-        cfg.freq_write = SPI_FREQUENCY; // 送信時のSPIクロック (最大80MHz, 80MHzを整数で割った値に丸められます)
-        cfg.freq_read   = SPI_READ_FREQUENCY; // 受信時のSPIクロック
-        cfg.spi_3wire   = false;              // 受信をMOSIピンで行う場合はtrueを設定
-        cfg.use_lock    = true;               // トランザクションロックを使用する場合はtrueを設定
-        cfg.dma_channel = dma_channel;        // Set the DMA channel (1 or 2. 0=disable)
-        cfg.pin_sclk    = TFT_SCLK;           // SPIのSCLKピン番号を設定
-        cfg.pin_mosi    = TFT_MOSI;           // SPIのMOSIピン番号を設定
-        cfg.pin_miso    = TFT_MISO;           // SPIのMISOピン番号を設定 (-1 = disable)
-        cfg.pin_dc      = TFT_DC;             // SPIのD/Cピン番号を設定  (-1 = disable)
-        bus->config(cfg);                     // 設定値をバスに反映します。
-        tft._panel_instance.setBus(bus);      // バスをパネルにセットします。
+    uint32_t tft_driver = preferences.getUInt("DRIVER", get_tft_driver());
+    switch(tft_driver) {
+        case 0x9341:
+            tft._panel_instance = new lgfx::Panel_ILI9341();
+            break;
+        case 0x9481:
+            tft._panel_instance = new lgfx::Panel_ILI9481();
+            break;
+        case 0x9488:
+            tft._panel_instance = new lgfx::Panel_ILI9488();
+            break;
+        case 0x7796:
+            tft._panel_instance = new lgfx::Panel_ST7796();
+            break;
+        case 0x8357D:
+            tft._panel_instance = new lgfx::Panel_HX8357D();
+            break;
+        default: {
+            LOG_ERROR(TAG_TFT, F("Unknown display driver")); // Needs to be in curly braces
+        }
+    }
+    LOG_VERBOSE(TAG_TFT, F("%s - %d"), __FILE__, __LINE__);
+
+#ifdef ESP32_PARALLEL
+    { // Set 8-bit parallel bus control
+        auto bus       = (lgfx::v1::Bus_Parallel8*)tft._bus_instance;
+        auto cfg       = bus->config(); // バス設定用の構造体を取得します。
+        cfg.i2s_port   = I2S_NUM_0;
+        cfg.freq_write = 20000000;
+        cfg.pin_wr     = TFT_WR;
+        cfg.pin_rd     = TFT_RD;
+        cfg.pin_rs     = TFT_DC;
+        cfg.pin_d0     = TFT_D0;
+        cfg.pin_d1     = TFT_D1;
+        cfg.pin_d2     = TFT_D2;
+        cfg.pin_d3     = TFT_D3;
+        cfg.pin_d4     = TFT_D4;
+        cfg.pin_d5     = TFT_D5;
+        cfg.pin_d6     = TFT_D6;
+        cfg.pin_d7     = TFT_D7 bus->config(cfg); // 設定値をバスに反映します。
+        tft._panel_instance.setBus(bus);          // Set the bus on the panel.
+    }
+#else
+    {                    // Set SPI bus control
+        auto bus       = (lgfx::v1::Bus_SPI*)tft._bus_instance;
+        auto cfg       = bus->config(); // Get the structure for bus configuration.
+        cfg.spi_host   = HSPI_HOST;     // Select the SPI to use  (VSPI_HOST or HSPI_HOST)
+        cfg.spi_mode   = 0;             // Set SPI communication mode  (0 ~ 3)
+        cfg.freq_write = SPI_FREQUENCY; // SPI clock during transmission  (Max 80MHz, 80MHz Can be rounded to the value
+                                        // divided by an integer )
+        cfg.freq_read   = SPI_READ_FREQUENCY;                    // SPI clock when receiving
+        cfg.spi_3wire   = (TFT_MOSI == -1);                      // true when receiving with MOSI pin
+        cfg.use_lock    = true;                                  // Set to true when using transaction lock
+        cfg.dma_channel = dma_channel;                           // Set the DMA channel (1 or 2. 0=disable)
+        cfg.pin_sclk    = preferences.getChar("SCLK", TFT_SCLK); // Set SPI SCLK pin number
+        cfg.pin_mosi    = preferences.getChar("MOSI", TFT_MOSI); // Set SPI MOSI pin number
+        cfg.pin_miso    = preferences.getChar("MISO", TFT_MISO); // Set SPI MISO pin number  (-1 = disable)
+        cfg.pin_dc      = preferences.getChar("DC", TFT_DC);     // Set SPI D/C pin number   (-1 = disable)
+        bus->config(cfg);                                        // The set value is reflected on the bus.
+        bus->init();
+        int8_t cs = preferences.getChar("CS", TFT_CS);
+        _read_panel_id(bus, cs, 0x00);    // NOP
+        _read_panel_id(bus, cs, 0x04);    // ST7789/ILI9488: RDDID (04h): Read Display ID
+        _read_panel_id(bus, cs, 0x09);    // ST7789/ILI9488: RDDST (09h): Read Display Status
+        _read_panel_id(bus, cs, 0xBF);    // /ILI9481: Device Code Read
+        tft._panel_instance->setBus(bus); // Set the bus on the panel.
+    }
+#endif
+    LOG_VERBOSE(TAG_TFT, F("%s - %d"), __FILE__, __LINE__);
+
+    {                                                               // Set the display panel control.
+        auto cfg             = tft._panel_instance->config();       // Gets the structure for display panel settings.
+        cfg.pin_cs           = preferences.getChar("CS", TFT_CS);   // CS Pin Number   (-1 = disable)
+        cfg.pin_rst          = preferences.getChar("RST", TFT_RST); // RST Pin Number  (-1 = disable)
+        cfg.pin_busy         = -1;                                  // BUSY Pin Number (-1 = disable)
+        cfg.memory_width     = w;                                   // Maximum width supported by  driver IC
+        cfg.memory_height    = h;                                   // Maximum height supported by driver IC
+        cfg.panel_width      = w;                                   // Actually displayable width
+        cfg.panel_height     = h;                                   // Actually displayable height
+        cfg.offset_x         = 0;                                   // Amount of X-direction offset of the panel
+        cfg.offset_y         = 0;                                   // Amount of Y-direction offset of the panel
+        cfg.offset_rotation  = 0;     // Offset of values in the direction of rotation 0 ~ 7 (4 ~ 7 are upside down)
+        cfg.dummy_read_pixel = 8;     // Number of dummy read bits before pixel reading
+        cfg.dummy_read_bits  = 1;     // Number of bits of dummy read before reading data other than pixels
+        cfg.readable         = true;  // Set to true if data can be read
+        cfg.invert           = false; // Set to true if the light and darkness of the panel is reversed
+        cfg.rgb_order        = false; // Set to true if the red and blue of the panel are swapped
+        cfg.dlen_16bit       = false; // Set to true for panels that send data length in 16-bit units
+        cfg.bus_shared =
+            true; // Set to true if the bus is shared with the SD card (bus control is performed with drawJpgFile etc.)
+        tft._panel_instance->config(cfg);
     }
 
-    {                                                       // 表示パネル制御の設定を行います。
-        auto cfg            = tft._panel_instance.config(); // 表示パネル設定用の構造体を取得します。
-        cfg.pin_cs          = TFT_CS;                       // CSが接続されているピン番号   (-1 = disable)
-        cfg.pin_rst         = TFT_RST;                      // RSTが接続されているピン番号  (-1 = disable)
-        cfg.pin_busy        = -1;                           // BUSYが接続されているピン番号 (-1 = disable)
-        cfg.memory_width    = w;                            // ドライバICがサポートしている最大の幅
-        cfg.memory_height   = h;                            // ドライバICがサポートしている最大の高さ
-        cfg.panel_width     = w;                            // 実際に表示可能な幅
-        cfg.panel_height    = h;                            // 実際に表示可能な高さ
-        cfg.offset_x        = 0;                            // パネルのX方向オフセット量
-        cfg.offset_y        = 0;                            // パネルのY方向オフセット量
-        cfg.offset_rotation = 0;      // 回転方向の値のオフセット 0~7 (4~7は上下反転)
-        cfg.dummy_read_pixel = 8;     // ピクセル読出し前のダミーリードのビット数
-        cfg.dummy_read_bits  = 1;     // ピクセル以外のデータ読出し前のダミーリードのビット数
-        cfg.readable         = false; // データ読出しが可能な場合 trueに設定
-        cfg.invert           = true;  // パネルの明暗が反転してしまう場合 trueに設定
-        cfg.rgb_order        = false; // パネルの赤と青が入れ替わってしまう場合 trueに設定
-        cfg.dlen_16bit       = false; // データ長を16bit単位で送信するパネルの場合 trueに設定
-        cfg.bus_shared = true; // SDカードとバスを共有している場合 trueに設定(drawJpgFile等でバス制御を行います)
+    LOG_VERBOSE(TAG_TFT, F("%s - %d"), __FILE__, __LINE__);
 
-        tft._panel_instance.config(cfg);
-    }
+#if 0
+    {                                            // Set the backlight control. (Delete if not needed)
+        auto cfg = tft._light_instance.config(); // Get the backlight structure for configuration.
 
-    { // バックライト制御の設定を行います。（必要なければ削除）
-        auto cfg = tft._light_instance.config(); // バックライト設定用の構造体を取得します。
-
-        cfg.pin_bl      = TFT_BCKL; // バックライトが接続されているピン番号
-        cfg.invert      = false;    // バックライトの輝度を反転させる場合 true
-        cfg.freq        = 44100;    // バックライトのPWM周波数
-        cfg.pwm_channel = 0;        // 使用するPWMのチャンネル番号
+        cfg.pin_bl      = preferences.getChar("BCKL", TFT_BCKL); // Backlight Pin Number
+        cfg.invert      = false; // True if you want to invert the brightness of the Backlight
+        cfg.freq        = 44100; // Backlight PWM frequency
+        cfg.pwm_channel = 0;     // PWM channel number to use
 
         tft._light_instance.config(cfg);
-        tft._panel_instance.setLight(&tft._light_instance); // バックライトをパネルにセットします。
+        tft._panel_instance->setLight(&tft._light_instance); // Set the Backlight on the panel.
+    }
+#endif
+
+    LOG_VERBOSE(TAG_TFT, F("%s - %d"), __FILE__, __LINE__);
+
+    uint32_t touch_driver = preferences.getUInt("T_DRIVER", get_touch_driver());
+    switch(touch_driver) {
+        case 0x0911:
+            tft._touch_instance = new lgfx::Touch_GT911();
+            break;
+        case 0x5206:
+        case 0x6336:
+            tft._touch_instance = new lgfx::Touch_FT5x06();
+            break;
+        case 0x2046:
+            tft._touch_instance = new lgfx::Touch_XPT2046();
+            break;
+        case 0x0610:
+            tft._touch_instance = new lgfx::Touch_STMPE610();
+            break;
+        default: {
+            LOG_ERROR(TAG_TFT, F("Unknown touch driver")); // Needs to be in curly braces
+        };
     }
 
-    { // タッチスクリーン制御の設定を行います。（必要なければ削除）
-        auto cfg            = tft._touch_instance.config();
-        cfg.x_min           = 0;    // タッチスクリーンから得られる最小のX値(生の値)
-        cfg.x_max           = 319;  // タッチスクリーンから得られる最大のX値(生の値)
-        cfg.y_min           = 0;    // タッチスクリーンから得られる最小のY値(生の値)
-        cfg.y_max           = 479;  // タッチスクリーンから得られる最大のY値(生の値)
-        cfg.pin_int         = -1;   // INTが接続されているピン番号
-        cfg.bus_shared      = true; // 画面と共通のバスを使用している場合 trueを設定
-        cfg.offset_rotation = 0; // 表示とタッチの向きのが一致しない場合の調整 0~7の値で設定
-        cfg.spi_host        = VSPI_HOST;           // 使用するSPIを選択 (HSPI_HOST or VSPI_HOST)
-        cfg.freq            = SPI_TOUCH_FREQUENCY; // SPIクロックを設定
-        cfg.pin_sclk        = TFT_SCLK;            // SCLKが接続されているピン番号
-        cfg.pin_mosi        = TFT_MOSI;            // MOSIが接続されているピン番号
-        cfg.pin_miso        = TFT_MISO;            // MISOが接続されているピン番号
-        cfg.pin_cs          = TOUCH_CS;            //   CSが接続されているピン番号
-        tft._touch_instance.config(cfg);
-        tft._panel_instance.setTouch(&tft._touch_instance); // タッチスクリーンをパネルにセットします。
+    if(touch_driver == 0x2046 || touch_driver == 0x0610) { // Set the touch screen control. (Delete if not needed)
+        auto cfg            = tft._touch_instance->config();
+        cfg.pin_int         = TOUCH_IRQ;      // INT Pin Number
+        cfg.offset_rotation = 0;              // Adjustment when the display and touch orientation do not match:
+                                              // Set with a value from 0 to 7
+        cfg.bus_shared = true;                // Set to true if you are using the same bus as the screen
+        cfg.spi_host   = HSPI_HOST;           // Select the SPI to use  (HSPI_HOST or VSPI_HOST)
+        cfg.pin_sclk   = TFT_SCLK;            // SCLK Pin Number
+        cfg.pin_mosi   = TFT_MOSI;            // MOSI Pin Number
+        cfg.pin_miso   = TFT_MISO;            // MISO Pin Number
+        cfg.pin_cs     = TOUCH_CS;            //   CS Pin Number
+        cfg.freq       = SPI_TOUCH_FREQUENCY; // Set SPI clock
+        cfg.x_min      = 0;                   // Minimum X value (raw value) obtained from touch screen
+        cfg.x_max      = w - 1;               // Maximum X value (raw value) obtained from touch screen
+        cfg.y_min      = 0;                   // Minimum Y value (raw value) obtained from touch screen
+        cfg.y_max      = h - 1;               // Maximum Y value (raw value) obtained from touch screen
+
+        tft._touch_instance->config(cfg);
+        tft._panel_instance->setTouch(tft._touch_instance); // Set the touch screen on the panel.
     }
-    tft.setPanel(&tft._panel_instance); // 使用するパネルをセットします。
+
+    if(touch_driver == 0x6336 || touch_driver == 0x5206 ||
+       touch_driver == 0x0911) { // Set the touch screen control. (Delete if not needed)
+        auto cfg            = tft._touch_instance->config();
+        cfg.pin_int         = TOUCH_IRQ; // INT Pin Number
+        cfg.offset_rotation = 0;         // Adjustment when the display and touch orientation do not match:
+
+        cfg.bus_shared = false; // Set to true if you are using the same bus as the screen
+        cfg.pin_sda    = TOUCH_SDA;
+        cfg.pin_scl    = TOUCH_SCL;
+        cfg.i2c_port   = I2C_TOUCH_PORT;      // Select I2C to use (0 or 1)
+        cfg.i2c_addr   = I2C_TOUCH_ADDRESS;   // I2C device address number
+        cfg.freq       = I2C_TOUCH_FREQUENCY; // Set I2C clock
+        cfg.x_min      = 0;                   // Minimum X value (raw value) obtained from touch screen
+        cfg.x_max      = w - 1;               // Maximum X value (raw value) obtained from touch screen
+        cfg.y_min      = 0;                   // Minimum Y value (raw value) obtained from touch screen
+        cfg.y_max      = h - 1;               // Maximum Y value (raw value) obtained from touch screen
+        tft._touch_instance->config(cfg);
+        tft._panel_instance->setTouch(tft._touch_instance); // Set the touch screen on the panel.
+    }
+
+    tft.setPanel(tft._panel_instance); // Set the panel to be used.
+    LOG_VERBOSE(TAG_TFT, F("%s - %d"), __FILE__, __LINE__);
+    preferences.end();
 
     /* TFT init */
     tft.begin();
     tft.setSwapBytes(true); /* set endianess */
+
+    LOG_VERBOSE(TAG_TFT, F("%s - %d"), __FILE__, __LINE__);
 }
 
 void LovyanGfx::show_info()
@@ -98,60 +237,67 @@ void LovyanGfx::show_info()
 
     LOG_VERBOSE(TAG_TFT, F("LovyanGFX  : v%d.%d.%d"), LGFX_VERSION_MAJOR, LGFX_VERSION_MINOR, LGFX_VERSION_PATCH);
 
-    //     LOG_VERBOSE(TAG_TFT, F("Transactns : %s"), (tftSetup.trans == 1) ? PSTR(D_YES) : PSTR(D_NO));
-    //     LOG_VERBOSE(TAG_TFT, F("Interface  : %s"), (tftSetup.serial == 1) ? PSTR("SPI") : PSTR("Parallel"));
-
+#ifdef ESP32_PARALLEL
     {
+        LOG_VERBOSE(TAG_TFT, F("Interface  : Parallel"));
+        auto bus = (lgfx::v1::Bus_Parallel8*)tft._bus_instance;
+        auto cfg = bus->config(); // Get the structure for bus configuration.
+        tftPinInfo(F("TFT_WR"), cfg.pin_wr);
+        tftPinInfo(F("TFT_RD"), cfg.pin_rd);
+        tftPinInfo(F("TFT_RS"), cfg.pin_rs);
+
+        tftPinInfo(F("TFT_D0"), cfg.pin_d0);
+        tftPinInfo(F("TFT_D1"), cfg.pin_d1);
+        tftPinInfo(F("TFT_D2"), cfg.pin_d2);
+        tftPinInfo(F("TFT_D3"), cfg.pin_d3);
+        tftPinInfo(F("TFT_D4"), cfg.pin_d4);
+        tftPinInfo(F("TFT_D5"), cfg.pin_d5);
+        tftPinInfo(F("TFT_D6"), cfg.pin_d6);
+        tftPinInfo(F("TFT_D7"), cfg.pin_d7);
+    }
+#else
+    {
+        LOG_VERBOSE(TAG_TFT, F("Interface  : Serial"));
         auto bus = (lgfx::v1::Bus_SPI*)tft._bus_instance;
-        auto cfg = bus->config(); // バス設定用の構造体を取得します。
+        auto cfg = bus->config(); // Get the structure for bus configuration.
         tftPinInfo(F("MOSI"), cfg.pin_mosi);
         tftPinInfo(F("MISO"), cfg.pin_miso);
         tftPinInfo(F("SCLK"), cfg.pin_sclk);
         tftPinInfo(F("TFT_DC"), cfg.pin_dc);
     }
+#endif
 
     {
-        auto cfg = tft._panel_instance.config(); // バス設定用の構造体を取得します。
+        auto cfg = tft._panel_instance->config(); // Get the structure for bus configuration.
         tftPinInfo(F("TFT_CS"), cfg.pin_cs);
         tftPinInfo(F("TFT_RST"), cfg.pin_rst);
     }
 
+#ifndef ESP32_PARALLEL
     {
         auto bus      = (lgfx::v1::Bus_SPI*)tft._bus_instance;
-        auto cfg      = bus->config(); // バス設定用の構造体を取得します。
+        auto cfg      = bus->config(); // Get the structure for bus configuration.
         uint32_t freq = cfg.freq_write / 100000;
         LOG_VERBOSE(TAG_TFT, F("Display SPI freq. : %d.%d MHz"), freq / 10, freq % 10);
     }
+#endif
 
     {
-        auto cfg = tft._touch_instance.config(); // バス設定用の構造体を取得します。
+        auto cfg = tft._touch_instance->config(); // Get the structure for bus configuration.
         if(cfg.pin_cs != -1) {
             tftPinInfo(F("TOUCH_CS"), cfg.pin_cs);
             uint32_t freq = cfg.freq / 100000;
             LOG_VERBOSE(TAG_TFT, F("Touch SPI freq.   : %d.%d MHz"), freq / 10, freq % 10);
         }
+        if(cfg.pin_sda != -1) {
+            tftPinInfo(F("TOUCH_SDA"), cfg.pin_sda);
+        }
+        if(cfg.pin_scl != -1) {
+            tftPinInfo(F("TOUCH_SCL"), cfg.pin_scl);
+            uint32_t freq = cfg.freq / 100000;
+            LOG_VERBOSE(TAG_TFT, F("Touch I2C freq.   : %d.%d MHz"), freq / 10, freq % 10);
+        }
     }
-
-    //     tftPinInfo(F("TFT_WR"), tftSetup.pin_tft_wr);
-    //     tftPinInfo(F("TFT_RD"), tftSetup.pin_tft_rd);
-
-    //     tftPinInfo(F("TFT_D0"), tftSetup.pin_tft_d0);
-    //     tftPinInfo(F("TFT_D1"), tftSetup.pin_tft_d1);
-    //     tftPinInfo(F("TFT_D2"), tftSetup.pin_tft_d2);
-    //     tftPinInfo(F("TFT_D3"), tftSetup.pin_tft_d3);
-    //     tftPinInfo(F("TFT_D4"), tftSetup.pin_tft_d4);
-    //     tftPinInfo(F("TFT_D5"), tftSetup.pin_tft_d5);
-    //     tftPinInfo(F("TFT_D6"), tftSetup.pin_tft_d6);
-    //     tftPinInfo(F("TFT_D7"), tftSetup.pin_tft_d7);
-
-    //     if(tftSetup.serial == 1) {
-    //         LOG_VERBOSE(TAG_TFT, F("Display SPI freq. : %d.%d MHz"), tftSetup.tft_spi_freq / 10,
-    //                     tftSetup.tft_spi_freq % 10);
-    //     }
-    //     if(tftSetup.pin_tch_cs != -1) {
-    //         LOG_VERBOSE(TAG_TFT, F("Touch SPI freq.   : %d.%d MHz"), tftSetup.tch_spi_freq / 10,
-    //                     tftSetup.tch_spi_freq % 10);
-    //     }
 }
 
 void LovyanGfx::splashscreen()
@@ -326,6 +472,50 @@ const char* LovyanGfx::get_tft_model()
     return "RM68140";
 #else
     return "Other";
+#endif
+}
+
+uint32_t LovyanGfx::get_tft_driver()
+{
+#if defined(ILI9341_DRIVER)
+    return 0x9341;
+#elif defined(ST7735_DRIVER)
+    return 0x7735;
+#elif defined(ILI9163_DRIVER)
+    return 0x9163;
+#elif defined(S6D02A1_DRIVER)
+    return 0x6D02A1;
+#elif defined(ST7796_DRIVER)
+    return 0x7796;
+#elif defined(ILI9486_DRIVER)
+    return 0x9486;
+#elif defined(ILI9481_DRIVER)
+    return 0x9481;
+#elif defined(ILI9488_DRIVER)
+    return 0x9488;
+#elif defined(HX8357D_DRIVER)
+    return 0x8357D;
+#elif defined(EPD_DRIVER)
+    return 0xED;
+#elif defined(ST7789_DRIVER)
+    return 0x7789;
+#elif defined(R61581_DRIVER)
+    return 0x61581;
+#elif defined(ST7789_2_DRIVER)
+    return 0x77892;
+#elif defined(RM68140_DRIVER)
+    return 0x68140;
+#else
+    return 0;
+#endif
+}
+
+uint32_t LovyanGfx::get_touch_driver()
+{
+#ifdef TOUCH_DRIVER
+    return TOUCH_DRIVER > 0 ? TOUCH_DRIVER : 0;
+#else
+    return 0;
 #endif
 }
 

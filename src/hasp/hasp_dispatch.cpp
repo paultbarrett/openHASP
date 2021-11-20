@@ -107,7 +107,7 @@ void dispatch_state_brightness(const char* topic, hasp_event_t eventid, int32_t 
     dispatch_state_subtopic(topic, payload);
 }
 
-void dispatch_state_antiburn( hasp_event_t eventid)
+void dispatch_state_antiburn(hasp_event_t eventid)
 {
     char topic[9];
     char payload[64];
@@ -953,8 +953,36 @@ void dispatch_web_update(const char*, const char* espOtaUrl, uint8_t source)
 
 void dispatch_antiburn(const char*, const char* payload, uint8_t source)
 {
-    bool state = Parser::is_true(payload);   // ON, TRUE, YES or 1
-    hasp_set_antiburn(state ? 30 : 0, 1000); // ON = 25 cycles of 1000 milli seconds (i.e. 25 sec)
+    if(strlen(payload) == 0) {
+        dispatch_state_antiburn(hasp_get_antiburn());
+        return;
+    }
+
+    size_t maxsize = (128u * ((strlen(payload) / 128) + 1)) + 128;
+    DynamicJsonDocument json(maxsize);
+
+    // Note: Deserialization needs to be (const char *) so the objects WILL be copied
+    // this uses more memory but otherwise the mqtt receive buffer can get overwritten by the send buffer !!
+    DeserializationError jsonError = deserializeJson(json, payload);
+    json.shrinkToFit();
+    bool state = false;
+
+    if(jsonError) { // Couldn't parse incoming payload as json
+        state = Parser::is_true(payload);
+    } else {
+        if(json.is<uint8_t>()) { // plain numbers are parsed as valid json object
+            state = json.as<uint8_t>();
+
+        } else if(json.is<bool>()) { // true and false are parsed as valid json object
+            state = json.as<bool>();
+
+        } else { // other text
+            JsonVariant key = json[F("state")];
+            if(!key.isNull()) state = Parser::is_true(key.as<std::string>().c_str());
+        }
+    }
+
+    hasp_set_antiburn(state ? 30 : 0, 1000); // ON = 30 cycles of 1000 milli seconds (i.e. 30 sec)
 }
 
 // restart the device
@@ -1059,6 +1087,8 @@ void dispatch_send_discovery(const char*, const char*, uint8_t source)
 #if HASP_USE_MQTT > 0
 
     StaticJsonDocument<1024> doc;
+    char data[1024];
+    char buffer[64];
 
     doc[F("node")]  = haspDevice.get_hostname();
     doc[F("mdl")]   = haspDevice.get_model();
@@ -1066,6 +1096,13 @@ void dispatch_send_discovery(const char*, const char*, uint8_t source)
     doc[F("hwid")]  = haspDevice.get_hardware_id();
     doc[F("pages")] = haspPages.count();
     doc[F("sw")]    = haspDevice.get_version();
+
+#if HASP_USE_HTTP > 0
+    network_get_ipaddress(buffer, sizeof(buffer));
+    doc[F("uri")] = String(F("http://")) + String(buffer);
+#elif defined(WINDOWS) || defined(POSIX)
+    doc[F("uri")] = "http://google.pt";
+#endif
 
     JsonObject input = doc.createNestedObject(F("input"));
     JsonArray relay  = doc.createNestedArray(F("power"));
@@ -1076,7 +1113,6 @@ void dispatch_send_discovery(const char*, const char*, uint8_t source)
     gpio_discovery(input, relay, led, dimmer);
 #endif
 
-    char data[1024];
     size_t len = serializeJson(doc, data);
 
     switch(mqtt_send_discovery(data, len)) {
@@ -1159,6 +1195,7 @@ void dispatch_current_state(uint8_t source)
     dispatch_current_page();
     dispatch_send_sensordata(NULL, NULL, source);
     dispatch_send_discovery(NULL, NULL, source);
+    dispatch_state_antiburn(hasp_get_antiburn());
 }
 
 // Format filesystem and erase EEPROM
@@ -1264,9 +1301,7 @@ void dispatch_service(const char*, const char* payload, uint8_t source)
 static void dispatch_add_command(const char* p_cmdstr, void (*func)(const char*, const char*, uint8_t))
 {
     if(nCommands >= sizeof(commands) / sizeof(haspCommand_t)) {
-        LOG_FATAL(TAG_MSGR, F("CMD_OVERFLOW %d"), nCommands);
-        while(1) {
-        }
+        LOG_FATAL(TAG_MSGR, F("CMD_OVERFLOW %d"), nCommands); // Needs to be in curly braces
     } else {
         commands[nCommands].p_cmdstr = p_cmdstr;
         commands[nCommands].func     = func;

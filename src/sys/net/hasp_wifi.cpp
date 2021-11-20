@@ -21,6 +21,7 @@
 #ifndef ESP_ARDUINO_VERSION_VAL
 #define ESP_ARDUINO_VERSION_VAL(major, minor, patch) ((major << 16) | (minor << 8) | (patch))
 #endif
+
 #include <WiFi.h>
 #elif defined(ARDUINO_ARCH_ESP8266)
 #include <ESP8266WiFi.h>
@@ -37,20 +38,16 @@ SPIClass espSPI(ESPSPI_MOSI, ESPSPI_MISO, ESPSPI_SCLK); // SPI port where esp is
 #endif
 //#include "DNSserver.h"
 
-// #ifdef USE_CONFIG_OVERRIDE
-// #include "user_config_override.h"
-// #endif
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#endif
 
-#ifdef WIFI_SSID
-char wifiSsid[32] = WIFI_SSID;
-#else
-char wifiSsid[32]     = "";
+#ifndef WIFI_PASSW
+#define WIFI_PASSW ""
 #endif
-#ifdef WIFI_PASSW
-char wifiPassword[64] = WIFI_PASSW;
-#else
-char wifiPassword[64] = "";
-#endif
+
+char wifiSsid[MAX_USERNAME_LENGTH] = WIFI_SSID;
+char wifiPassword[MAX_PASSWORD_LENGTH] = WIFI_PASSW;
 char wifiIpAddress[16]        = "";
 uint16_t wifiReconnectCounter = 0;
 bool wifiOnline               = false;
@@ -432,17 +429,11 @@ void wifiSetup()
 
     // check for the presence of the shield:
     if(WiFiSpi.status() == WL_NO_SHIELD) {
-        LOG_FATAL(TAG_WIFI, F("WiFi shield not present"));
-        // don't continue:
-        while(true)
-            ;
+        LOG_FATAL(TAG_WIFI, F("WiFi shield not present")); // Needs to be in curly braces
     }
 
     if(!WiFiSpi.checkProtocolVersion()) {
-        LOG_FATAL(TAG_WIFI, F("Protocol version mismatch. Please upgrade the firmware"));
-        // don't continue:
-        while(true)
-            ;
+        LOG_FATAL(TAG_WIFI, F("Protocol version mismatch. Please upgrade the firmware")); // Needs to be in curly braces
     }
 
     // attempt to connect to Wifi network

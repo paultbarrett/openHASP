@@ -5,7 +5,7 @@
 #define HASP_LOVYANGFX_DRIVER_H
 
 #if defined(ARDUINO) && defined(LGFX_USE_V1)
-#include "Arduino.h"
+#include <Arduino.h>
 
 #include "lvgl.h"
 #include "LovyanGFX.hpp"
@@ -21,15 +21,24 @@
 #include "custom/bootlogo_template.h" // Sketch tab header for xbm images
 #endif
 
+#ifndef TOUCH_CS
+#define TOUCH_CS -1
+#endif
+
+#ifndef TOUCH_IRQ
+#define TOUCH_IRQ -1
+#endif
+
 namespace dev {
 class LGFX : public lgfx::LGFX_Device {
   public:
-    lgfx::Panel_ILI9488 _panel_instance;
+    // lgfx::Panel_ILI9481 _panel_instance;
+    lgfx::Panel_LCD* _panel_instance;
     lgfx::IBus* _bus_instance; // SPIバスのインスタンス
     lgfx::Light_PWM _light_instance;
-    lgfx::Touch_XPT2046 _touch_instance;
+    lgfx::ITouch* _touch_instance;
 
-    LGFX(void)
+     LGFX(void)
     {
         _bus_instance = new lgfx::v1::Bus_SPI();
     }
@@ -53,6 +62,9 @@ class LovyanGfx : BaseTft {
     const char* get_tft_model();
 
   private:
+    uint32_t get_tft_driver();
+    uint32_t get_touch_driver();
+
     void tftOffsetInfo(uint8_t pin, uint8_t x_offset, uint8_t y_offset)
     {
         if(x_offset != 0) {

@@ -5,7 +5,7 @@
 #define HASP_H
 
 #ifdef ARDUINO
-#include "Arduino.h"
+#include <Arduino.h>
 #endif
 
 #include "hasplib.h"
@@ -69,8 +69,8 @@ void hasp_set_sleep_state(uint8_t state);
 void hasp_get_sleep_time(uint16_t& short_time, uint16_t& long_time);
 void hasp_set_sleep_time(uint16_t short_time, uint16_t long_time);
 void hasp_set_wakeup_touch(bool en);
-bool hasp_get_antiburn();
 void hasp_set_antiburn(int32_t repeat_count,uint32_t period);
+hasp_event_t hasp_get_antiburn();
 
 void hasp_init(void);
 void hasp_load_json(void);

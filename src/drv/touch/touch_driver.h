@@ -5,7 +5,7 @@
 #define HASP_BASE_TOUCH_DRIVER_H
 
 #ifdef ARDUINO
-#include "Arduino.h"
+#include <Arduino.h>
 #endif
 
 #include "hasplib.h"
@@ -27,6 +27,7 @@ class BaseTouch {
     {}
     IRAM_ATTR bool read(lv_indev_drv_t* indev_driver, lv_indev_data_t* data)
     {
+        data->state = LV_INDEV_STATE_REL;
         return false;
     }
     void calibrate(uint16_t* calData)
@@ -47,34 +48,37 @@ class BaseTouch {
 #define TOUCH_DRIVER -1 // No Touch
 #endif
 
-#if TOUCH_DRIVER == 2046 && defined(USER_SETUP_LOADED)
+#if defined(LGFX_USE_V1)
+#warning Building for LovyanGfx Touch
+#include "touch_driver_lovyangfx.h"
+#elif TOUCH_DRIVER == 0x2046 && defined(USER_SETUP_LOADED)
 #warning Building for XPT2046
 //#include "touch_driver_xpt2046.h"
 #include "touch_driver_tftespi.h"
-#elif TOUCH_DRIVER == 5206
+#elif TOUCH_DRIVER == 0x5206
 #warning Building for FT5206
 #include "touch_driver_ft5206.h"
-#elif TOUCH_DRIVER == 6336
+#elif TOUCH_DRIVER == 0x6336
 #warning Building for FT6336
 #include "touch_driver_ft6336u.h"
-#elif TOUCH_DRIVER == 610
+#elif TOUCH_DRIVER == 0x0610
 #warning Building for STMPE610
 #include "touch_driver_stmpe610.h"
-#elif TOUCH_DRIVER == 911
+#elif TOUCH_DRIVER == 0x0911
 #warning Building for GT911
 #include "touch_driver_gt911.h"
-#elif TOUCH_DRIVER == 0xADC
+#elif TOUCH_DRIVER == 0x0ADC
 #warning Building for analog touch
 #include "touch_driver_analog.h"
 #else
 #warning Building for Generic Touch
 using dev::BaseTouch;
 extern dev::BaseTouch haspTouch;
-IRAM_ATTR bool touch_read(lv_indev_drv_t* indev_driver, lv_indev_data_t* data)
-{
-    data->state = LV_INDEV_STATE_REL;
-    return false;
-}
+// IRAM_ATTR bool touch_read(lv_indev_drv_t* indev_driver, lv_indev_data_t* data)
+// {
+//     data->state = LV_INDEV_STATE_REL;
+//     return false;
+// }
 #endif
 
 #endif

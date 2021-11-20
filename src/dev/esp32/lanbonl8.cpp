@@ -5,10 +5,15 @@
 
 #if defined(LANBONL8)
 
-#include "Arduino.h"
+#include <Arduino.h>
 #include "dev/esp32/esp32.h"
 
 #include "driver/pcnt.h" // Pulse count driver
+#include "hal/pcnt_hal.h"
+#include "hal/gpio_hal.h"
+#include "soc/pcnt_periph.h"
+#include "esp_rom_gpio.h"
+
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
 
@@ -25,8 +30,7 @@
 #define PCNT_INPUT_CTRL_IO 36      // Pulse Control GPIO
 #define PCNT_FILTER_VAL 300        // filter (damping, inertia) value for avoiding glitches in the count, max. 1023
 #define MEASURED_WATTS 1580
-#define MEASURED_PULSES_PER_SECOND 281
-// Per second
+#define MEASURED_PULSES_PER_SECOND 281 // Pulses / Per second
 
 int16_t PulseCounter = 0; // pulse counter, max. value is 32535
 int OverflowCounter  = 0; // pulse counter overflow counter
