@@ -102,19 +102,19 @@ lv_font_t* hasp_font_load(const char* font_name)
 
     if(res == LV_FS_RES_OK) {
         success = lvgl_load_font(&file, font);
+    }
 
-        if(!success) {
-            LOG_WARNING(TAG_FONT, "Error loading font file: %s\n", font_name);
-            /*
-             * When `lvgl_load_font` fails it can leak some pointers.
-             * All non-null pointers can be assumed as allocated and
-             * `lv_font_free` should free them correctly.
-             */
-            hasp_font_free(font);
-            font = NULL;
-        }
+    lv_fs_close(&file);
 
-        lv_fs_close(&file);
+    if(!success) {
+        LOG_WARNING(TAG_FONT, "Error loading font %s", font_name);
+        /*
+         * When `lvgl_load_font` fails it can leak some pointers.
+         * All non-null pointers can be assumed as allocated and
+         * `lv_font_free` should free them correctly.
+         */
+        hasp_font_free(font);
+        font = NULL;
     }
 
     return font;
@@ -412,14 +412,7 @@ static int32_t load_glyph(lv_fs_file_t* fp, lv_font_fmt_txt_dsc_t* font_dsc, uin
     }
 
     uint8_t* glyph_bmp;
-#ifdef ESP32
-    if(psramFound())
-        glyph_bmp = (uint8_t*)ps_malloc(sizeof(uint8_t) * cur_bmp_size);
-    else
-        glyph_bmp = (uint8_t*)malloc(sizeof(uint8_t) * cur_bmp_size);
-#else
-    glyph_bmp = (uint8_t*)malloc(sizeof(uint8_t) * cur_bmp_size);
-#endif
+    glyph_bmp = (uint8_t*)hasp_malloc(sizeof(uint8_t) * cur_bmp_size);
 
     font_dsc->glyph_bitmap = glyph_bmp;
 
